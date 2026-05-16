@@ -63,3 +63,66 @@ export async function getStreamToken() {
   const response = await axiosInstance.get("/chat/token");
   return response.data;
 }
+
+export async function getRooms() {
+  try {
+    const res = await axiosInstance.get("/rooms");
+    return res.data;
+  } catch (error) {
+    if (error.response?.status === 401) return [];
+    throw error;
+  }
+}
+
+export async function createRoom(roomData) {
+  const res = await axiosInstance.post("/rooms", roomData);
+  return res.data;
+}
+
+export async function joinRoom(roomId) {
+  const res = await axiosInstance.post(`/rooms/${roomId}/join`);
+  return res.data;
+}
+
+export async function updateRoom(roomId, roomData) {
+  const res = await axiosInstance.patch(`/rooms/${roomId}`, roomData);
+  return res.data;
+}
+
+export async function deleteRoom(roomId) {
+  const res = await axiosInstance.delete(`/rooms/${roomId}`);
+  return res.data;
+}
+
+export async function translateText(text, targetLanguage) {
+  const res = await axiosInstance.post("/ai/translate", { text, targetLanguage });
+  return res.data;
+}
+
+export async function transcribeAudio(audioBlob) {
+  const formData = new FormData();
+  formData.append("audio", audioBlob, "recording.webm");
+  const res = await axiosInstance.post("/ai/transcribe", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return res.data;
+}
+
+export async function getTodaysChallenges() {
+  const res = await axiosInstance.get("/challenges/today");
+  return res.data;
+}
+
+export async function submitChallengeAnswer(challengeId, challengeIndex, userAnswer) {
+  const res = await axiosInstance.post("/challenges/submit", {
+    challengeId,
+    challengeIndex,
+    userAnswer,
+  });
+  return res.data;
+}
+
+export async function refreshChallenges() {
+  const res = await axiosInstance.post("/challenges/refresh");
+  return res.data;
+}

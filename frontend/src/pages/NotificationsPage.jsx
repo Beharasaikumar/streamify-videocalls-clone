@@ -1,10 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { acceptFriendRequest, getFriendRequests } from "../lib/api";
-import { BellIcon, ClockIcon, MessageSquareIcon, UserCheckIcon } from "lucide-react";
+import {
+  BellIcon, ClockIcon, MessageSquareIcon,
+  UserCheckIcon, MessageCircleIcon, UsersIcon,
+} from "lucide-react";
+import toast from "react-hot-toast";
 import NoNotificationsFound from "../components/NoNotificationsFound";
+import { useChatContext } from "../context/ChatContext";
+import { useEffect, useState } from "react";
+import { Link } from "react-router";
 
 const NotificationsPage = () => {
   const queryClient = useQueryClient();
+  const { client: chatClient } = useChatContext();
+  const [unreadChannels, setUnreadChannels] = useState({ dms: [], groups: [] });
 
   const { data: friendRequests, isLoading } = useQuery({
     queryKey: ["friendRequests"],
@@ -14,117 +23,311 @@ const NotificationsPage = () => {
   const { mutate: acceptRequestMutation, isPending } = useMutation({
     mutationFn: acceptFriendRequest,
     onSuccess: () => {
+       toast.success("Friend request accepted 🎉");
       queryClient.invalidateQueries({ queryKey: ["friendRequests"] });
       queryClient.invalidateQueries({ queryKey: ["friends"] });
     },
+    onError: () => {
+    toast.error("Failed to accept request ❌");
+  },
   });
+
+  useEffect(() => {
+    if (!chatClient?.userID) return;
+
+    const fetchUnread = async () => {
+      try {
+        const channels = await chatClient.queryChannels(
+          { members: { $in: [chatClient.userID] } },
+          [{ last_message_at: -1 }],
+          { watch: true, state: true, limit: 30, presence: true }
+        );
+
+        const unreadDMs = [];
+        const unreadGroups = [];
+
+        channels.forEach((ch) => {
+          const membership = ch.state?.membership;
+          const serverUnread = membership?.unread_count ?? ch.countUnread();
+          if (serverUnread <= 0) return;
+
+          const lastMsg = ch.state.messages?.slice(-1)[0];
+          const base = {
+            channelId: ch.id,
+            unreadCount: serverUnread,
+            lastMessage: lastMsg?.text || "Sent an attachment",
+            lastTime: lastMsg?.created_at,
+          };
+
+          if (ch.data?.isGroupRoom) {
+            unreadGroups.push({
+              ...base,
+              name: ch.data?.name || ch.id,
+              emoji: ch.data?.emoji || "💬",
+            });
+          } else {
+            const otherMember = Object.values(ch.state.members).find(
+              (m) => m.user.id !== chatClient.userID
+            );
+            unreadDMs.push({
+              ...base,
+              userId: otherMember?.user?.id,
+              name: otherMember?.user?.name || "Unknown",
+              image: otherMember?.user?.image,
+            });
+          }
+        });
+
+        setUnreadChannels({ dms: unreadDMs, groups: unreadGroups });
+      } catch (err) {
+        console.error("Failed to fetch unread channels:", err);
+      }
+    };
+
+    fetchUnread();
+
+    const handler = () => fetchUnread();
+    chatClient.on("message.new", handler);
+    chatClient.on("notification.message_new", handler);
+    chatClient.on("channel.read", handler);
+
+    return () => {
+      chatClient.off("message.new", handler);
+      chatClient.off("notification.message_new", handler);
+      chatClient.off("channel.read", handler);
+    };
+  }, [chatClient, chatClient?.userID]);
 
   const incomingRequests = friendRequests?.incomingReqs || [];
   const acceptedRequests = friendRequests?.acceptedReqs || [];
+  const hasAnything =
+    incomingRequests.length > 0 ||
+    acceptedRequests.length > 0 ||
+    unreadChannels.dms.length > 0 ||
+    unreadChannels.groups.length > 0;
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="container mx-auto max-w-4xl space-y-8">
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight mb-6">Notifications</h1>
+      <div className="container mx-auto max-w-2xl space-y-8">
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Notifications</h1>
 
         {isLoading ? (
           <div className="flex justify-center py-12">
-            <span className="loading loading-spinner loading-lg"></span>
+            <span className="loading loading-spinner loading-lg" />
           </div>
         ) : (
           <>
-            {incomingRequests.length > 0 && (
-              <section className="space-y-4">
-                <h2 className="text-xl font-semibold flex items-center gap-2">
-                  <UserCheckIcon className="h-5 w-5 text-primary" />
-                  Friend Requests
-                  <span className="badge badge-primary ml-2">{incomingRequests.length}</span>
+            {unreadChannels.dms.length > 0 && (
+              <section className="space-y-3">
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  <MessageCircleIcon className="size-5 text-primary" />
+                  Unread Messages
+                  <span className="badge badge-primary ml-1">
+                    {unreadChannels.dms.length}
+                  </span>
                 </h2>
 
-                <div className="space-y-3">
-                  {incomingRequests.map((request) => (
-                    <div
-                      key={request._id}
-                      className="card bg-base-200 shadow-sm hover:shadow-md transition-shadow"
-                    >
-                      <div className="card-body p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="avatar w-14 h-14 rounded-full bg-base-300">
-                              <img src={request.sender.profilePic} alt={request.sender.fullName} />
-                            </div>
-                            <div>
-                              <h3 className="font-semibold">{request.sender.fullName}</h3>
-                              <div className="flex flex-wrap gap-1.5 mt-1">
-                                <span className="badge badge-secondary badge-sm">
-                                  Native: {request.sender.nativeLanguage}
-                                </span>
-                                <span className="badge badge-outline badge-sm">
-                                  Learning: {request.sender.learningLanguage}
-                                </span>
+                {unreadChannels.dms.map((ch) => (
+                  <Link
+                    to={`/chat/${ch.userId}`}
+                    key={ch.channelId}
+                    className="card bg-base-200 shadow-sm hover:shadow-md transition-shadow block"
+                  >
+                    <div className="card-body p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="relative shrink-0">
+                          <div className="size-11 rounded-full overflow-hidden bg-base-300">
+                            {ch.image ? (
+                              <img
+                                src={ch.image}
+                                alt={ch.name}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-sm font-bold opacity-50">
+                                {ch.name[0].toUpperCase()}
                               </div>
-                            </div>
+                            )}
                           </div>
-
-                          <button
-                            className="btn btn-primary btn-sm"
-                            onClick={() => acceptRequestMutation(request._id)}
-                            disabled={isPending}
-                          >
-                            Accept
-                          </button>
+                          <span className="absolute -top-0.5 -right-0.5 size-4 rounded-full bg-primary flex items-center justify-center text-[9px] font-bold text-primary-content">
+                            {ch.unreadCount > 9 ? "9+" : ch.unreadCount}
+                          </span>
                         </div>
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-semibold text-sm truncate">{ch.name}</p>
+                            {ch.lastTime && (
+                              <span className="text-xs opacity-40 shrink-0 flex items-center gap-1">
+                                <ClockIcon className="size-3" />
+                                {new Date(ch.lastTime).toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm opacity-55 truncate mt-0.5">
+                            {ch.lastMessage}
+                          </p>
+                        </div>
+
+                        <MessageSquareIcon className="size-4 opacity-30 shrink-0" />
                       </div>
                     </div>
-                  ))}
-                </div>
+                  </Link>
+                ))}
               </section>
             )}
 
-            {/* ACCEPTED REQS NOTIFICATONS */}
+            {unreadChannels.groups.length > 0 && (
+              <section className="space-y-3">
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  <UsersIcon className="size-5 text-secondary" />
+                  Unread Room Messages
+                  <span className="badge badge-secondary ml-1">
+                    {unreadChannels.groups.length}
+                  </span>
+                </h2>
+
+                {unreadChannels.groups.map((ch) => (
+                  <Link
+                    to={`/rooms/${ch.channelId}`}
+                    key={ch.channelId}
+                    className="card bg-base-200 shadow-sm hover:shadow-md transition-shadow block"
+                  >
+                    <div className="card-body p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="relative shrink-0">
+                          <div className="size-11 rounded-full bg-secondary/20 flex items-center justify-center text-xl">
+                            {ch.emoji}
+                          </div>
+                          <span className="absolute -top-0.5 -right-0.5 size-4 rounded-full bg-secondary flex items-center justify-center text-[9px] font-bold text-secondary-content">
+                            {ch.unreadCount > 9 ? "9+" : ch.unreadCount}
+                          </span>
+                        </div>
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-semibold text-sm truncate">{ch.name}</p>
+                            {ch.lastTime && (
+                              <span className="text-xs opacity-40 shrink-0 flex items-center gap-1">
+                                <ClockIcon className="size-3" />
+                                {new Date(ch.lastTime).toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm opacity-55 truncate mt-0.5">
+                            {ch.lastMessage}
+                          </p>
+                        </div>
+
+                        <MessageSquareIcon className="size-4 opacity-30 shrink-0" />
+                      </div>
+                    </div>
+                  </Link>
+                ))}
+              </section>
+            )}
+
+            {incomingRequests.length > 0 && (
+              <section className="space-y-3">
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  <UserCheckIcon className="size-5 text-primary" />
+                  Friend Requests
+                  <span className="badge badge-primary ml-1">
+                    {incomingRequests.length}
+                  </span>
+                </h2>
+
+                {incomingRequests.map((request) => (
+                  <div
+                    key={request._id}
+                    className="card bg-base-200 shadow-sm hover:shadow-md transition-shadow"
+                  >
+                    <div className="card-body p-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="size-11 rounded-full overflow-hidden bg-base-300 shrink-0">
+                            <img
+                              src={request.sender.profilePic}
+                              alt={request.sender.fullName}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                          <div>
+                            <h3 className="font-semibold text-sm">
+                              {request.sender.fullName}
+                            </h3>
+                            <div className="flex flex-wrap gap-1.5 mt-1">
+                              <span className="badge badge-secondary badge-sm">
+                                Native: {request.sender.nativeLanguage}
+                              </span>
+                              <span className="badge badge-outline badge-sm">
+                                Learning: {request.sender.learningLanguage}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => acceptRequestMutation(request._id)}
+                          disabled={isPending}
+                        >
+                          Accept
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </section>
+            )}
+
             {acceptedRequests.length > 0 && (
-              <section className="space-y-4">
-                <h2 className="text-xl font-semibold flex items-center gap-2">
-                  <BellIcon className="h-5 w-5 text-success" />
+              <section className="space-y-3">
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  <BellIcon className="size-5 text-success" />
                   New Connections
                 </h2>
 
-                <div className="space-y-3">
-                  {acceptedRequests.map((notification) => (
-                    <div key={notification._id} className="card bg-base-200 shadow-sm">
-                      <div className="card-body p-4">
-                        <div className="flex items-start gap-3">
-                          <div className="avatar mt-1 size-10 rounded-full">
-                            <img
-                              src={notification.recipient.profilePic}
-                              alt={notification.recipient.fullName}
-                            />
-                          </div>
-                          <div className="flex-1">
-                            <h3 className="font-semibold">{notification.recipient.fullName}</h3>
-                            <p className="text-sm my-1">
-                              {notification.recipient.fullName} accepted your friend request
-                            </p>
-                            <p className="text-xs flex items-center opacity-70">
-                              <ClockIcon className="h-3 w-3 mr-1" />
-                              Recently
-                            </p>
-                          </div>
-                          <div className="badge badge-success">
-                            <MessageSquareIcon className="h-3 w-3 mr-1" />
-                            New Friend
-                          </div>
+                {acceptedRequests.map((notification) => (
+                  <div key={notification._id} className="card bg-base-200 shadow-sm">
+                    <div className="card-body p-4">
+                      <div className="flex items-start gap-3">
+                        <div className="size-10 rounded-full overflow-hidden shrink-0">
+                          <img
+                            src={notification.recipient.profilePic}
+                            alt={notification.recipient.fullName}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <h3 className="font-semibold text-sm">
+                            {notification.recipient.fullName}
+                          </h3>
+                          <p className="text-sm opacity-60 my-0.5">
+                            {notification.recipient.fullName} accepted your friend request
+                          </p>
+                          <p className="text-xs opacity-40 flex items-center gap-1">
+                            <ClockIcon className="size-3" />
+                            Recently
+                          </p>
+                        </div>
+                        <div className="badge badge-success badge-sm gap-1">
+                          <MessageSquareIcon className="size-3" />
+                          New Friend
                         </div>
                       </div>
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </section>
             )}
 
-            {incomingRequests.length === 0 && acceptedRequests.length === 0 && (
-              <NoNotificationsFound />
-            )}
+            {!hasAnything && <NoNotificationsFound />}
           </>
         )}
       </div>

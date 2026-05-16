@@ -21,10 +21,17 @@ const OnboardingPage = () => {
 
   const { mutate: onboardingMutation, isPending } = useMutation({
     mutationFn: completeOnboarding,
-    onSuccess: () => {
-      toast.success("Profile onboarded successfully");
-      queryClient.invalidateQueries({ queryKey: ["authUser"] });
-    },
+   onSuccess: (data) => {
+    toast.success("Profile onboarded successfully");
+
+    queryClient.setQueryData(["authUser"], {
+      success: true,
+      user: data.user,
+    });
+    
+    queryClient.invalidateQueries({ queryKey: ["authUser"] });
+    window.location.reload();
+  },
 
     onError: (error) => {
       toast.error(error.response.data.message);
@@ -34,14 +41,21 @@ const OnboardingPage = () => {
   const handleSubmit = (e) => {
     e.preventDefault();
 
-    onboardingMutation(formState);
+    onboardingMutation({
+      ...formState,
+      profilePic: formState.profilePic,
+    });
   };
 
   const handleRandomAvatar = () => {
     const idx = Math.floor(Math.random() * 100) + 1; // 1-100 included
-    const randomAvatar = `https://avatar.iran.liara.run/public/${idx}.png`;
+    const randomAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${idx}`;
 
-    setFormState({ ...formState, profilePic: randomAvatar });
+    setFormState((prev) => ({
+      ...prev,
+      profilePic: randomAvatar,
+    }));
+    
     toast.success("Random profile picture generated!");
   };
 
@@ -52,9 +66,7 @@ const OnboardingPage = () => {
           <h1 className="text-2xl sm:text-3xl font-bold text-center mb-6">Complete Your Profile</h1>
 
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* PROFILE PIC CONTAINER */}
             <div className="flex flex-col items-center justify-center space-y-4">
-              {/* IMAGE PREVIEW */}
               <div className="size-32 rounded-full bg-base-300 overflow-hidden">
                 {formState.profilePic ? (
                   <img
